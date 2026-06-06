@@ -1,3 +1,4 @@
+#include <iostream>
 #include <stdio.h>
 #include <string>
 #include <thread>
@@ -5,54 +6,47 @@
 #include <windows.h>
 #include <winnls.h>
 
-int main(int argc, char *argv[]) {
-  // argv[1] = program path
-  // argv[2] = width/cols
-  // argv[3] = height/rows
-  // argv[4+] = optional extra args
-
+int wmain(int argc, wchar_t *argv[]) {
   if (argc < 4) {
-    printf("Usage: conpty-emacs.exe <program> <cols> <rows> [extra args...]\n");
+    std::wcout
+        << L"Usage: conpty-emacs.exe <program> <cols> <rows> [extra args...]\n";
     return 1;
   }
 
-  int cols = atoi(argv[2]);
-  int rows = atoi(argv[3]);
+  std::wstring command = argv[1];
+  std::wstring fullCommand = L"\"" + command + L"\"";
+
+  int cols = std::stoi(std::wstring(argv[2]));
+  int rows = std::stoi(std::wstring(argv[3]));
   COORD size = {(SHORT)cols, (SHORT)rows};
 
-  // Build full command: argv[1] + any extra args after argv[3]
-  int shellLen = MultiByteToWideChar(CP_UTF8, 0, argv[1], -1, NULL, 0);
-  std::vector<wchar_t> shellW(shellLen);
-  MultiByteToWideChar(CP_UTF8, 0, argv[1], -1, shellW.data(), shellLen);
-
-  std::wstring fullCmdStr(shellW.data()); // starts with program path
   for (int i = 4; i < argc; i++) {
-    int argLen = MultiByteToWideChar(CP_UTF8, 0, argv[i], -1, NULL, 0);
-    std::vector<wchar_t> argW(argLen);
-    MultiByteToWideChar(CP_UTF8, 0, argv[i], -1, argW.data(), argLen);
-    fullCmdStr += L" ";
-    fullCmdStr += argW.data();
+    fullCommand += L" ";
+    fullCommand += argv[i];
   }
+
+  std::wcout << L"Full Command: " << fullCommand << L"\n";
+
   // CreateProcessW needs a mutable buffer
-  std::vector<wchar_t> cmdBuf(fullCmdStr.begin(), fullCmdStr.end());
-  cmdBuf.push_back(0);
+  std::vector<wchar_t> cmdBuf(fullCommand.begin(), fullCommand.end());
+  cmdBuf.push_back(L'\0');
 
   // --- Pipes ---
   HANDLE ptyIn, ptyOut; // PTY side (child end)
   HANDLE curIn, curOut; // Our side (parent end)
 
   // Input pipe: parent writes to curIn, PTY reads from ptyIn
-  if (!CreatePipe(&ptyIn, &curIn, NULL, 0)) {
-    printf("Error creating input pipe: %lu\n", GetLastError());
+  if (!CreatePipe(&ptyIn, &curIn, nullptr, 0)) {
+    std::wcout << L"Error creating input pipe: " << GetLastError() << L"\n";
     return 1;
   }
   // Output pipe: PTY writes to ptyOut, parent reads from curOut
-  if (!CreatePipe(&curOut, &ptyOut, NULL, 0)) {
-    printf("Error creating output pipe: %lu\n", GetLastError());
+  if (!CreatePipe(&curOut, &ptyOut, nullptr, 0)) {
+    std::wcout << L"Error creating output pipe: " << GetLastError() << L"\n";
     return 1;
   }
 
-  printf("Pipes successfully created\n");
+  std::wcout << L"Pipes successfully created\n";
 
   // --- ConPTY ---
   HPCON hPC = INVALID_HANDLE_VALUE;
@@ -64,31 +58,34 @@ int main(int argc, char *argv[]) {
 
   if (FAILED(hr)) {
     printf("Error creating ConPTY: 0x%08lx\n", hr);
+    std::wcout << L"Error creating ConPTY: " << hr << "\n";
     return 1;
   }
 
-  printf("ConPTY successfully created\n");
+  std::wcout << L"ConPTY successfully created\n";
 
   // --- Thread attribute list (must stay alive until after CreateProcessW) ---
   STARTUPINFOEXW siEx{};
   siEx.StartupInfo.cb = sizeof(STARTUPINFOEXW);
 
   SIZE_T attrListSize = 0;
-  InitializeProcThreadAttributeList(NULL, 1, 0, &attrListSize);
+  InitializeProcThreadAttributeList(nullptr, 1, 0, &attrListSize);
   std::vector<BYTE> attrListBuf(attrListSize);
   siEx.lpAttributeList =
       reinterpret_cast<PPROC_THREAD_ATTRIBUTE_LIST>(attrListBuf.data());
 
   if (!InitializeProcThreadAttributeList(siEx.lpAttributeList, 1, 0,
                                          &attrListSize)) {
-    printf("Error initializing attribute list: %lu\n", GetLastError());
+    std::wcout << L"Error initializing attribute list: " << GetLastError()
+               << L"\n";
     return 1;
   }
 
   if (!UpdateProcThreadAttribute(siEx.lpAttributeList, 0,
                                  PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, hPC,
-                                 sizeof(HPCON), NULL, NULL)) {
-    printf("Error updating proc thread attribute: %lu\n", GetLastError());
+                                 sizeof(HPCON), nullptr, nullptr)) {
+    std::wcout << L"Error updating proc thread attribute: " << GetLastError()
+               << L"\n";
     return 1;
   }
 
@@ -123,30 +120,31 @@ int main(int argc, char *argv[]) {
   DeleteProcThreadAttributeList(siEx.lpAttributeList);
 
   if (!ok) {
-    printf("Error creating process: %lu\n", GetLastError());
+    std::wcout << L"Error creating process: " << GetLastError() << L"\n";
     return 1;
   }
 
-  printf("Process successfully spawned, PID: %lu\n", piClient.dwProcessId);
+  std::wcout << L"Process successfully spawned, PID: " << piClient.dwProcessId
+             << L"\n";
 
   // --- I/O threads ---
   std::thread outputThr([curOut, hStdout]() {
     char buffer[4096];
     DWORD bytesRead;
-    while (ReadFile(curOut, buffer, sizeof(buffer), &bytesRead, NULL) &&
+    while (ReadFile(curOut, buffer, sizeof(buffer), &bytesRead, nullptr) &&
            bytesRead > 0) {
       DWORD written;
-      WriteFile(hStdout, buffer, bytesRead, &written, NULL);
+      WriteFile(hStdout, buffer, bytesRead, &written, nullptr);
     }
   });
 
   std::thread inputThr([curIn, hStdin]() {
     char buffer[4096];
     DWORD bytesRead;
-    while (ReadFile(hStdin, buffer, sizeof(buffer), &bytesRead, NULL) &&
+    while (ReadFile(hStdin, buffer, sizeof(buffer), &bytesRead, nullptr) &&
            bytesRead > 0) {
       DWORD written;
-      WriteFile(curIn, buffer, bytesRead, &written, NULL);
+      WriteFile(curIn, buffer, bytesRead, &written, nullptr);
     }
   });
 
@@ -163,7 +161,8 @@ int main(int argc, char *argv[]) {
   CloseHandle(curOut);
 
   outputThr.join();
-  inputThr.join();
+  inputThr.detach();
 
+  std::wcout << L"Exiting program\n";
   return 0;
 }
