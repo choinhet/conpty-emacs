@@ -29,11 +29,12 @@
   (interactive)
   (let ((proc (get-process "conpty")))
     (message "Sending to process: %s" (process-status proc))
-    (conpty-send-string proc "echo hello\n")))
+    (conpty-send-string proc "echo 'hello'\r\n")))
 
 (process-live-p (get-process "conpty"))
 
 (defun test-start ()
   (interactive)
-  (conpty-start  "C:/Program Files/Git/bin/bash.exe" 80 24 '("-i"))
+  (conpty-start  "C:/Program Files/Git/bin/bash.exe" 80 24)
   (pop-to-buffer "*conpty*"))
+
