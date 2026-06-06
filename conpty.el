@@ -7,18 +7,21 @@
   "Replaces term-exec-1: spawns via CONPTY bridge."
   (let* ((cols (if (and (boundp 'term-width) (> term-width 0)) term-width 80))
          (rows (if (and (boundp 'term-height) (> term-height 0)) term-height 24))
-         (process-environment (cons "TERM=xterm-256color" process-environment)))
-    (make-process
-     :name name
-     :buffer buffer
-     :command (append (list conpty-bridge-exe
-                            command
-                            (number-to-string cols)
-                            (number-to-string rows))
-                      switches)
-     :coding 'binary
-     :connection-type 'pipe
-     :noquery t)))
+         (process-environment (cons "TERM=xterm-256color" process-environment))
+         (proc
+          (make-process
+           :name name
+           :buffer buffer
+           :command (append (list conpty-bridge-exe
+                                  command
+                                  (number-to-string cols)
+                                  (number-to-string rows))
+                            switches)
+           :coding 'binary
+           :connection-type 'pipe
+           :noquery t)))
+    (set-process-coding-system proc 'binary 'utf-8-unix)
+    proc))
 
 (defun conpty-term (program)
   "Opens a term running PROGRAM through CONPTY bridge."
@@ -28,6 +31,7 @@
   (unwind-protect
       (let ((buf (make-term "conpty" program)))
         (with-current-buffer buf
+          (setq-local locale-coding-system 'utf-8-unix)
           (term-char-mode))
         (pop-to-buffer buf))
     (advice-remove 'term-exec-1 #'conpty-term-exec-1)))
