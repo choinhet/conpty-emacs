@@ -1,40 +1,33 @@
-(defun conpty-filter (process output)
-  (message "OUTPUT: %S" output)
-  (with-current-buffer (process-buffer process)
-    (let ((inhibit-read-only t))
-      (goto-char (point-max))
-      (insert output))))
+(require 'term)
 
-(defun conpty-start (program cols rows &optional args)
-  "Spawns a conpty process with PROGRAM, with size equals COLS x ROWS"
-  (let ((process (make-process
-                  :name "conpty"
-                  :buffer "*conpty*"
-                  :command (append
-                            (list (expand-file-name "~/c-projects/conpty-emacs/main.exe")
-                                  program
-                                  (number-to-string cols)
-                                  (number-to-string rows))
-                            args)
-                  :coding 'binary
-                  :connection-type 'pipe
-                  :filter 'conpty-filter)))
-    process))
+(defvar conpty-bridge-exe (expand-file-name "~/c-projects/conpty-emacs/main.exe")
+  "Path to bridge CONPTY.")
 
-(defun conpty-send-string (process string)
-  "Sends a STRING to the conpty process"
-  (process-send-string process string))
+(defun conpty-term-exec-1 (name buffer command switches)
+  "Replaces term-exec-1: spawns via CONPTY bridge."
+  (let* ((cols (if (and (boundp 'term-width) (> term-width 0)) term-width 80))
+         (rows (if (and (boundp 'term-height) (> term-height 0)) term-height 24))
+         (process-environment (cons "TERM=xterm-256color" process-environment)))
+    (make-process
+     :name name
+     :buffer buffer
+     :command (append (list conpty-bridge-exe
+                            command
+                            (number-to-string cols)
+                            (number-to-string rows))
+                      switches)
+     :coding 'binary
+     :connection-type 'pipe
+     :noquery t)))
 
-(defun test-send ()
-  (interactive)
-  (let ((proc (get-process "conpty")))
-    (message "Sending to process: %s" (process-status proc))
-    (conpty-send-string proc "echo 'hello'\r\n")))
-
-(process-live-p (get-process "conpty"))
-
-(defun test-start ()
-  (interactive)
-  (conpty-start  "C:/Program Files/Git/bin/bash.exe" 80 24)
-  (pop-to-buffer "*conpty*"))
-
+(defun conpty-term (program)
+  "Opens a term running PROGRAM through CONPTY bridge."
+  (interactive
+   (list (read-string "Program: " "C:/Program Files/Git/bin/bash.exe")))
+  (advice-add 'term-exec-1 :override #'conpty-term-exec-1)
+  (unwind-protect
+      (let ((buf (make-term "conpty" program)))
+        (with-current-buffer buf
+          (term-char-mode))
+        (pop-to-buffer buf))
+    (advice-remove 'term-exec-1 #'conpty-term-exec-1)))
