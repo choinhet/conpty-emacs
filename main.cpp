@@ -43,38 +43,24 @@ int wmain(int argc, wchar_t *argv[]) {
     fullCommand += argv[i];
   }
 
-  // std::wcout << L"Full Command: " << fullCommand << L"\n";
-
-  // CreateProcessW needs a mutable buffer
-
   std::vector<wchar_t> cmdBuf(fullCommand.begin(), fullCommand.end());
   cmdBuf.push_back(L'\0');
 
-  // --- Pipes ---
-
-  HANDLE ptyIn, ptyOut; // PTY side (child end)
-  HANDLE curIn, curOut; // Our side (parent end)
-
-  // Input pipe: parent writes to curIn, PTY reads from ptyIn
+  HANDLE ptyIn, ptyOut;
+  HANDLE curIn, curOut;
 
   if (!CreatePipe(&ptyIn, &curIn, nullptr, 0)) {
     std::wcout << L"Error creating input pipe: " << GetLastError() << L"\n";
     return 1;
   }
 
-  // Output pipe: PTY writes to ptyOut, parent reads from curOut
-
   if (!CreatePipe(&curOut, &ptyOut, nullptr, 0)) {
     std::wcout << L"Error creating output pipe: " << GetLastError() << L"\n";
     return 1;
   }
 
-  // --- ConPTY ---
-
   HPCON hPC = INVALID_HANDLE_VALUE;
   HRESULT hr = CreatePseudoConsole(size, ptyIn, ptyOut, 0, &hPC);
-
-  // PTY-side handles are owned by the ConPTY now close our copies
 
   CloseHandle(ptyIn);
   CloseHandle(ptyOut);
@@ -85,8 +71,6 @@ int wmain(int argc, wchar_t *argv[]) {
 
     return 1;
   }
-
-  // --- Thread attribute list (must stay alive until after CreateProcessW) ---
 
   STARTUPINFOEXW siEx{};
   siEx.StartupInfo.cb = sizeof(STARTUPINFOEXW);
@@ -119,25 +103,11 @@ int wmain(int argc, wchar_t *argv[]) {
       CreateFileW(L"conpty.log", GENERIC_WRITE, FILE_SHARE_READ, nullptr,
                   CREATE_ALWAYS, 0, nullptr);
 
-  // --- Enable VT processing on the parent console ---
-
   HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);
   HANDLE hStdout = GetStdHandle(STD_OUTPUT_HANDLE);
 
   DWORD stdinType = GetFileType(hStdin);
   DWORD stdoutType = GetFileType(hStdout);
-
-  // DWORD consoleMode = 0;
-  // if (GetConsoleMode(hStdout, &consoleMode)) {
-  //   SetConsoleMode(hStdout, consoleMode | ENABLE_PROCESSED_OUTPUT |
-  //                               ENABLE_VIRTUAL_TERMINAL_PROCESSING |
-  //                               DISABLE_NEWLINE_AUTO_RETURN);
-  // }
-  // if (GetConsoleMode(hStdin, &consoleMode)) {
-  //   SetConsoleMode(hStdin, ENABLE_VIRTUAL_TERMINAL_INPUT);
-  // }
-
-  // --- Spawn the child process ---
 
   PROCESS_INFORMATION piClient{};
   BOOL ok =
@@ -150,9 +120,6 @@ int wmain(int argc, wchar_t *argv[]) {
                      nullptr,                      // inherit environment
                      nullptr,                      // inherit CWD
                      &siEx.StartupInfo, &piClient);
-
-  // Attribute list no longer needed after CreateProcessW
-
   DeleteProcThreadAttributeList(siEx.lpAttributeList);
 
   if (!ok) {
@@ -160,28 +127,25 @@ int wmain(int argc, wchar_t *argv[]) {
     return 1;
   }
 
-  // --- I/O threads ---
-
   std::thread outputThr([curOut, hStdout, stdinType, stdoutType]() {
-    debug("Out Pipe Opening", hLog);
-    debug("Stdin Type" + std::to_string(stdinType), hLog);
-    debug("Stdout Type" + std::to_string(stdoutType), hLog);
+    // debug("Out Pipe Opening", hLog);
+    // debug("Stdin Type" + std::to_string(stdinType), hLog);
+    // debug("Stdout Type" + std::to_string(stdoutType), hLog);
     char buffer[4096];
     DWORD bytesRead;
     while (ReadFile(curOut, buffer, sizeof(buffer), &bytesRead, nullptr) &&
            bytesRead > 0) {
       DWORD written = 0;
       std::string content(buffer, bytesRead);
-      debug("curOut emits: " + content + " bytes: " + std::to_string(bytesRead),
-            hLog);
+      // debug("curOut emits: " + content + " bytes: " +
+      // std::to_string(bytesRead), hLog);
       BOOL w =
           WriteFile(hStdout, content.data(), content.size(), &written, nullptr);
-      if (!w || written != bytesRead) {
-        debug("WRITE FAIL gle=" + std::to_string(GetLastError()), hLog);
-      }
+      // if (!w || written != bytesRead) {
+      //   debug("WRITE FAIL gle=" + std::to_string(GetLastError()), hLog);
+      // }
     }
-
-    debug("Out Pipe Closing", hLog);
+    // debug("Out Pipe Closing", hLog);
   });
 
   std::thread inputThr([curIn, hStdin, hStdout]() {
@@ -190,26 +154,19 @@ int wmain(int argc, wchar_t *argv[]) {
     while (ReadFile(hStdin, buffer, sizeof(buffer), &bytesRead, nullptr) &&
            bytesRead > 0) {
       std::string got(buffer, bytesRead);
-      debug("Got: " + got, hLog);
+      // debug("Got: " + got, hLog);
       WriteFile(curIn, buffer, bytesRead, nullptr, nullptr);
-      // FlushFileBuffers(curIn);
     }
   });
-
-  // Wait for child to exit, then clean up
 
   WaitForSingleObject(piClient.hProcess, INFINITE);
   CloseHandle(piClient.hThread);
   CloseHandle(piClient.hProcess);
   ClosePseudoConsole(hPC);
-
-  // Closing the pipe ends blocks ReadFile in the threads
-
   CloseHandle(curIn);
   CloseHandle(curOut);
   outputThr.join();
   inputThr.detach();
-  std::wcout << L"Exiting program\n";
 
   return 0;
 }
