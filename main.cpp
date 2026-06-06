@@ -128,34 +128,68 @@ int wmain(int argc, wchar_t *argv[]) {
   }
 
   std::thread outputThr([curOut, hStdout, stdinType, stdoutType]() {
-    // debug("Out Pipe Opening", hLog);
-    // debug("Stdin Type" + std::to_string(stdinType), hLog);
-    // debug("Stdout Type" + std::to_string(stdoutType), hLog);
     char buffer[4096];
     DWORD bytesRead;
     while (ReadFile(curOut, buffer, sizeof(buffer), &bytesRead, nullptr) &&
            bytesRead > 0) {
       DWORD written = 0;
       std::string content(buffer, bytesRead);
-      // debug("curOut emits: " + content + " bytes: " +
-      // std::to_string(bytesRead), hLog);
       BOOL w =
           WriteFile(hStdout, content.data(), content.size(), &written, nullptr);
-      // if (!w || written != bytesRead) {
-      //   debug("WRITE FAIL gle=" + std::to_string(GetLastError()), hLog);
-      // }
     }
-    // debug("Out Pipe Closing", hLog);
   });
 
-  std::thread inputThr([curIn, hStdin, hStdout]() {
+  std::thread inputThr([curIn, hStdin, hPC]() {
     char buffer[4096];
     DWORD bytesRead;
+    std::string apc;
+    int state = 0;
     while (ReadFile(hStdin, buffer, sizeof(buffer), &bytesRead, nullptr) &&
            bytesRead > 0) {
-      std::string got(buffer, bytesRead);
-      // debug("Got: " + got, hLog);
-      WriteFile(curIn, buffer, bytesRead, nullptr, nullptr);
+      std::string fwd;
+      for (DWORD i = 0; i < bytesRead; i++) {
+        unsigned char c = buffer[i];
+        switch (state) {
+        case 0:
+          if (c == 0x1b)
+            state = 1;
+          else
+            fwd += c;
+          break;
+        case 1:
+          if (c == '_') {
+            state = 2;
+            apc.clear();
+          } else {
+            fwd += 0x1b;
+            fwd += c;
+            state = 0;
+          }
+          break;
+        case 2:
+          if (c == 0x1b)
+            state = 3;
+          else
+            apc += c;
+          break;
+        case 3:
+          if (c == '\\') { // ST -> fim da APC
+            if (apc.rfind("RESIZE;", 0) == 0) {
+              int cols = 0, rows = 0;
+              sscanf(apc.c_str(), "RESIZE;%d;%d", &cols, &rows);
+              ResizePseudoConsole(hPC, COORD{(SHORT)cols, (SHORT)rows});
+            }
+            state = 0;
+          } else {
+            apc += 0x1b;
+            apc += c;
+            state = 2;
+          }
+          break;
+        }
+      }
+      if (!fwd.empty())
+        WriteFile(curIn, fwd.data(), fwd.size(), nullptr, nullptr);
     }
   });
 
