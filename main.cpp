@@ -43,7 +43,7 @@ int wmain(int argc, wchar_t *argv[]) {
     fullCommand += argv[i];
   }
 
-  std::wcout << L"Full Command: " << fullCommand << L"\n";
+  // std::wcout << L"Full Command: " << fullCommand << L"\n";
 
   // CreateProcessW needs a mutable buffer
 
@@ -90,6 +90,11 @@ int wmain(int argc, wchar_t *argv[]) {
 
   STARTUPINFOEXW siEx{};
   siEx.StartupInfo.cb = sizeof(STARTUPINFOEXW);
+  siEx.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
+  siEx.StartupInfo.hStdInput = nullptr;
+  siEx.StartupInfo.hStdOutput = nullptr;
+  siEx.StartupInfo.hStdError = nullptr;
+
   SIZE_T attrListSize = 0;
   InitializeProcThreadAttributeList(nullptr, 1, 0, &attrListSize);
   std::vector<BYTE> attrListBuf(attrListSize);
@@ -110,11 +115,17 @@ int wmain(int argc, wchar_t *argv[]) {
                << L"\n";
     return 1;
   }
+  static HANDLE hLog =
+      CreateFileW(L"conpty.log", GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+                  CREATE_ALWAYS, 0, nullptr);
 
   // --- Enable VT processing on the parent console ---
 
   HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);
   HANDLE hStdout = GetStdHandle(STD_OUTPUT_HANDLE);
+
+  DWORD stdinType = GetFileType(hStdin);
+  DWORD stdoutType = GetFileType(hStdout);
 
   // DWORD consoleMode = 0;
   // if (GetConsoleMode(hStdout, &consoleMode)) {
@@ -151,16 +162,26 @@ int wmain(int argc, wchar_t *argv[]) {
 
   // --- I/O threads ---
 
-  std::thread outputThr([curOut, hStdout]() {
-    debug("Out Pipe Opening", hStdout);
+  std::thread outputThr([curOut, hStdout, stdinType, stdoutType]() {
+    debug("Out Pipe Opening", hLog);
+    debug("Stdin Type" + std::to_string(stdinType), hLog);
+    debug("Stdout Type" + std::to_string(stdoutType), hLog);
     char buffer[4096];
     DWORD bytesRead;
     while (ReadFile(curOut, buffer, sizeof(buffer), &bytesRead, nullptr) &&
            bytesRead > 0) {
-      WriteFile(hStdout, buffer, bytesRead, nullptr, nullptr);
+      DWORD written = 0;
+      std::string content(buffer, bytesRead);
+      debug("curOut emits: " + content + " bytes: " + std::to_string(bytesRead),
+            hLog);
+      BOOL w =
+          WriteFile(hStdout, content.data(), content.size(), &written, nullptr);
+      if (!w || written != bytesRead) {
+        debug("WRITE FAIL gle=" + std::to_string(GetLastError()), hLog);
+      }
     }
 
-    debug("Out Pipe Closing", hStdout);
+    debug("Out Pipe Closing", hLog);
   });
 
   std::thread inputThr([curIn, hStdin, hStdout]() {
@@ -169,8 +190,9 @@ int wmain(int argc, wchar_t *argv[]) {
     while (ReadFile(hStdin, buffer, sizeof(buffer), &bytesRead, nullptr) &&
            bytesRead > 0) {
       std::string got(buffer, bytesRead);
-      debug("Got: " + got, hStdout);
+      debug("Got: " + got, hLog);
       WriteFile(curIn, buffer, bytesRead, nullptr, nullptr);
+      // FlushFileBuffers(curIn);
     }
   });
 
