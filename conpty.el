@@ -8,17 +8,21 @@
 (defvar-local conpty--last-size nil)
 
 (defun conpty--send-resize (&rest _)
-  (when-let* ((proc (get-buffer-process (current-buffer)))
-              (win  (get-buffer-window (current-buffer))))
+  (when-let* ((buf (get-buffer "*conpty*"))
+              (win (get-buffer-window buf))
+              (proc (get-buffer-process buf)))
     (let* ((cols (window-body-width win))
            (rows (window-body-height win))
            (size (cons cols rows)))
-      (unless (equal size conpty--last-size)
-        (setq conpty--last-size size)
+      (unless (equal (buffer-local-value 'conpty--last-size buf) size)
+        (with-current-buffer buf
+          (setq conpty--last-size size))
         (process-send-string proc (format "\e_RESIZE;%d;%d\e\\" cols rows))
-        (term-reset-size rows cols)))))
+        (with-selected-window win
+          (term-reset-size rows cols))))))
 
-(add-hook 'window-size-change-functions #'conpty--send-resize nil t)
+
+(add-hook 'window-size-change-functions #'conpty--send-resize)
 
 (defun conpty-term-exec-1 (name buffer command switches)
   "Replaces term-exec-1: spawns via CONPTY bridge."
@@ -40,18 +44,17 @@
     (set-process-coding-system proc 'binary 'utf-8-unix)
     proc))
 
-(defun conpty-term (program)
+(defun conpty-term ()
   "Opens a term running PROGRAM through CONPTY bridge."
-  (interactive
-   (list (read-string "Program: " ps-exe)))
+  (interactive)
   (advice-add 'term-exec-1 :override #'conpty-term-exec-1)
   (unwind-protect
-      (let ((buf (make-term "conpty" program)))
+      (let ((buf (make-term "conpty" ps-exe)))
         (with-current-buffer buf
           (setq-local locale-coding-system 'utf-8-unix)
           (term-char-mode)
           (conpty--send-resize))
-        (pop-to-buffer buf))
+        (switch-to-buffer buf))
     (advice-remove 'term-exec-1 #'conpty-term-exec-1)))
 
 (defun conpty--term-normal ()
